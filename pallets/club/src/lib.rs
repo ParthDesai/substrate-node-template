@@ -1,0 +1,343 @@
+#![cfg_attr(not(feature = "std"), no_std)]
+
+use frame_support::{log::error as error_log, traits::Currency};
+/// Edit this file to define custom logic or remove it if it is not needed.
+/// Learn more about FRAME and the core library of Substrate FRAME pallets:
+/// <https://docs.substrate.io/reference/frame-pallets/>
+pub use pallet::*;
+use sp_core::ConstU64;
+use sp_runtime::traits::CheckedMul;
+
+pub(crate) type BalanceOf<T> =
+	<<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
+
+#[frame_support::pallet]
+pub mod pallet {
+	use super::*;
+	use frame_support::{
+		pallet_prelude::*,
+		traits::{ExistenceRequirement, ReservableCurrency},
+		PalletId,
+	};
+	use frame_system::{pallet_prelude::*, WeightInfo};
+	use sp_runtime::{traits::AccountIdConversion, ArithmeticError};
+
+	#[pallet::pallet]
+	pub struct Pallet<T>(_);
+
+	/// Configure the pallet by specifying the parameters and types on which it depends.
+	#[pallet::config]
+	pub trait Config: frame_system::Config {
+		/// Currency account
+		type Currency: ReservableCurrency<<Self as frame_system::Config>::AccountId>;
+		/// Because this pallet emits events, it depends on the runtime's definition of an event.
+		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
+		/// Type representing the weight of this pallet
+		type WeightInfo: WeightInfo;
+		/// Root account
+		type RootOrigin: EnsureOrigin<Self::RuntimeOrigin>;
+		/// Number of blocks to make one year
+		type BlocksPerYear: Get<<Self as frame_system::Config>::BlockNumber>;
+		/// ID of the pallet which is used to derive sovereign account id of the pallet
+		#[pallet::constant]
+		type PalletId: Get<PalletId>;
+	}
+
+	#[derive(Copy, Clone, Eq, PartialEq, Encode, Decode, MaxEncodedLen, TypeInfo)]
+	pub struct ClubDetails<AccountId, Balance> {
+		owner: AccountId,
+		expense_per_year: Balance,
+	}
+
+	// Empty for now
+	#[derive(Copy, Clone, Eq, PartialEq, Encode, Decode, MaxEncodedLen, TypeInfo)]
+	pub struct MembershipDetails {}
+
+	// Empty for now
+	#[derive(Copy, Clone, Eq, PartialEq, Encode, Decode, MaxEncodedLen, TypeInfo)]
+	pub struct ExpirationDetails {
+		previous_membership_details: MembershipDetails,
+	}
+
+	#[derive(Copy, Clone, Eq, PartialEq, Encode, Decode, MaxEncodedLen, TypeInfo)]
+	pub struct MembershipRequestDetails<Balance> {
+		pub amount_paid: Balance,
+		pub time_in_year: u8,
+	}
+
+	#[pallet::storage]
+	pub(super) type NextClubId<T: Config> = StorageValue<_, u64, ValueQuery, ConstU64<1>>;
+
+	// Club_id => club_details
+	#[pallet::storage]
+	pub(super) type Clubs<T: Config> =
+		StorageMap<_, Identity, u64, ClubDetails<T::AccountId, BalanceOf<T>>>;
+
+	// AccountId => club_id => membership details
+	#[pallet::storage]
+	pub(super) type ClubMembership<T: Config> =
+		StorageDoubleMap<_, Identity, T::AccountId, Identity, u64, MembershipDetails>;
+
+	// Block_number => count of future expiration in `ClubMemberFutureExpirations`
+	#[pallet::storage]
+	pub(super) type ExpirationsPerBlock<T: Config> = StorageMap<_, Identity, T::BlockNumber, u64>;
+
+	// (Block_number, index) => (account, club_id)
+	#[pallet::storage]
+	pub(super) type ClubMemberFutureExpirations<T: Config> =
+		StorageMap<_, Identity, (T::BlockNumber, u64), (T::AccountId, u64)>;
+
+	// To renew double map of account_id -> club_id -> expiration details
+	#[pallet::storage]
+	pub(super) type ExpiredMemberships<T: Config> =
+		StorageDoubleMap<_, Identity, T::AccountId, Identity, u64, ExpirationDetails>;
+
+	// Membership request by user, can be cancelled anytime.
+	#[pallet::storage]
+	pub(super) type MembershipRequest<T: Config> = StorageDoubleMap<
+		_,
+		Identity,
+		T::AccountId,
+		Identity,
+		u64,
+		MembershipRequestDetails<BalanceOf<T>>,
+	>;
+
+	#[pallet::event]
+	#[pallet::generate_deposit(pub(super) fn deposit_event)]
+	pub enum Event<T: Config> {
+		/// A new club is created. [club_id, club_owner]
+		ClubCreated { club_id: u64, club_owner: T::AccountId },
+		/// Club owner is transferred. [club_id, new_owner]
+		ClubOwnerChanged { club_id: u64, old_owner: T::AccountId, new_owner: T::AccountId },
+		/// Annual expense for club membership is set. [club_id, annual_expense]
+		AnnualExpenseSet { club_id: u64, new_expense: BalanceOf<T> },
+		/// A member is added to the club. [club_id, member]
+		MemberAdded { club_id: u64, member: T::AccountId, membership_expiry_block: T::BlockNumber },
+		/// A member's membership is expired. [club_id, member]
+		MembershipExpired { club_id: u64, member: T::AccountId },
+	}
+
+	// Errors inform users that something went wrong.
+	#[pallet::error]
+	pub enum Error<T> {
+		/// No club found
+		ClubNotFound,
+		/// User is not club owner
+		NotClubOwner,
+		/// Not Club root
+		NotClubRoot,
+		/// User is already club member
+		AlreadyMember,
+		/// Member is not found
+		MemberNotFound,
+		/// Membership already requested
+		MembershipAlreadyRequested,
+		/// Membership request not found
+		MembershipRequestNotFound,
+	}
+
+	impl<T: Config> Pallet<T> {
+		/// The account ID for the feed call.
+		fn account_id() -> T::AccountId {
+			T::PalletId::get().into_account_truncating()
+		}
+	}
+
+	#[pallet::hooks]
+	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+		fn on_initialize(n: BlockNumberFor<T>) -> Weight {
+			// Get count of membership expiration for particular block
+			let maybe_expirations = ExpirationsPerBlock::<T>::get(n);
+			if maybe_expirations.is_none() {
+				return Weight::zero()
+			}
+			let expirations = maybe_expirations.unwrap();
+			ExpirationsPerBlock::<T>::remove(n);
+
+			// Iterate through expiration records and retrieve details
+			for i in 1..=expirations {
+				let maybe_member_expiration = ClubMemberFutureExpirations::<T>::get((n, i));
+				if maybe_member_expiration.is_none() {
+					// This expiration was deleted maybe part of extension. Let's continue
+					continue
+				}
+				ClubMemberFutureExpirations::<T>::remove((n, i));
+				let (account_id, club_id) = maybe_member_expiration.unwrap();
+				let maybe_membership_details = ClubMembership::<T>::get(&account_id, club_id);
+				if maybe_membership_details.is_none() {
+					continue
+				}
+
+				ExpiredMemberships::<T>::set(
+					&account_id,
+					club_id,
+					Some(ExpirationDetails {
+						previous_membership_details: maybe_membership_details.unwrap(),
+					}),
+				);
+
+				Self::deposit_event(Event::<T>::MembershipExpired { club_id, member: account_id });
+			}
+
+			Weight::zero()
+		}
+	}
+
+	#[pallet::call]
+	impl<T: Config> Pallet<T> {
+		// 1. Club creation
+		// Ensure user is root
+		// Create a club with initial expense and assign root as owner
+		#[pallet::weight(50_000_000)]
+		#[pallet::call_index(1)]
+		pub fn create_club(
+			origin: OriginFor<T>,
+			owner: T::AccountId,
+			expense_per_year: BalanceOf<T>,
+		) -> DispatchResult {
+			T::RootOrigin::try_origin(origin).map_err(|_e| Error::<T>::NotClubRoot)?;
+
+			let club = ClubDetails { owner: owner.clone(), expense_per_year };
+
+			let next_id = NextClubId::<T>::get();
+
+			Clubs::<T>::set(next_id, Some(club));
+			NextClubId::<T>::set(next_id + 1);
+
+			Self::deposit_event(Event::<T>::ClubCreated { club_id: next_id, club_owner: owner });
+			Ok(())
+		}
+
+		// 2. Transfer of membership
+		// Ensure user is club owner
+		// transfer
+		#[pallet::weight(50_000_000)]
+		#[pallet::call_index(2)]
+		pub fn transfer_club_owneship(
+			origin: OriginFor<T>,
+			club_id: u64,
+			new_owner: T::AccountId,
+		) -> DispatchResult {
+			let account_id = ensure_signed(origin)?;
+
+			let maybe_club = Clubs::<T>::get(club_id);
+			if maybe_club.is_none() {
+				return Err(Error::<T>::ClubNotFound.into())
+			}
+
+			let mut club = maybe_club.unwrap();
+			if club.owner != account_id {
+				return Err(Error::<T>::NotClubOwner.into())
+			}
+			club.owner = new_owner.clone();
+			Clubs::<T>::set(club_id, Some(club));
+
+			Self::deposit_event(Event::<T>::ClubOwnerChanged {
+				club_id,
+				old_owner: account_id,
+				new_owner,
+			});
+
+			Ok(())
+		}
+
+		#[pallet::weight(50_000_000)]
+		#[pallet::call_index(3)]
+		pub fn request_membership(
+			origin: OriginFor<T>,
+			club_id: u64,
+			time_in_year: u8,
+		) -> DispatchResult {
+			let account_id = ensure_signed(origin)?;
+			let maybe_club = Clubs::<T>::get(club_id);
+			if maybe_club.is_none() {
+				return Err(Error::<T>::ClubNotFound.into())
+			}
+			let club = maybe_club.unwrap();
+
+			let maybe_existing_request = MembershipRequest::<T>::get(&account_id, club_id);
+			if maybe_existing_request.is_some() {
+				return Err(Error::<T>::MembershipAlreadyRequested.into())
+			}
+
+			let time_of_year_as_balance = BalanceOf::<T>::try_from(time_in_year)
+				.map_err(|_| DispatchError::Arithmetic(ArithmeticError::Overflow))?;
+			let expense_to_be_charged = club
+				.expense_per_year
+				.checked_mul(&time_of_year_as_balance)
+				.ok_or(DispatchError::Arithmetic(ArithmeticError::Overflow))?;
+			T::Currency::transfer(
+				&account_id,
+				&Self::account_id(),
+				expense_to_be_charged,
+				ExistenceRequirement::KeepAlive,
+			)?;
+			let request_details =
+				MembershipRequestDetails { amount_paid: expense_to_be_charged, time_in_year };
+			MembershipRequest::<T>::set(&account_id, club_id, Some(request_details));
+
+			Ok(())
+		}
+
+		// 3. Add member
+		// Ensure user is club owner
+		// Ensure user has prepaid the deposit for membership
+		// Remove the prepaid deposit record
+		// add user as a member
+		// set expiration data
+		#[pallet::weight(50_000_000)]
+		#[pallet::call_index(4)]
+		pub fn add_member(
+			origin: OriginFor<T>,
+			club_id: u64,
+			requester: T::AccountId,
+		) -> DispatchResult {
+			let owner = ensure_signed(origin)?;
+
+			let maybe_club = Clubs::<T>::get(club_id);
+			if maybe_club.is_none() {
+				return Err(Error::<T>::ClubNotFound.into())
+			}
+
+			let club = maybe_club.unwrap();
+			if club.owner != owner {
+				return Err(Error::<T>::NotClubOwner.into())
+			}
+
+			let maybe_membership_request = MembershipRequest::<T>::get(&requester, club_id);
+			if maybe_membership_request.is_none() {
+				return Err(Error::<T>::MembershipRequestNotFound.into())
+			}
+			let membership_request = maybe_membership_request.unwrap();
+
+			let current_block = <frame_system::Pallet<T>>::block_number();
+			let expiry_block = current_block +
+				T::BlocksPerYear::get()
+					.checked_mul(&T::BlockNumber::from(membership_request.time_in_year))
+					.ok_or(DispatchError::Arithmetic(ArithmeticError::Overflow))?;
+			let maybe_expirations_per_block = ExpirationsPerBlock::<T>::get(expiry_block);
+			let expiry_per_block = if maybe_expirations_per_block.is_none() {
+				1
+			} else {
+				let previous_expirations = maybe_expirations_per_block.unwrap();
+				previous_expirations + 1
+			};
+			ExpirationsPerBlock::<T>::set(expiry_block, Some(expiry_per_block));
+			ClubMemberFutureExpirations::<T>::set(
+				(expiry_block, expiry_per_block),
+				Some((requester.clone(), club_id)),
+			);
+			MembershipRequest::<T>::remove(&requester, club_id);
+			ClubMembership::<T>::set(&requester, club_id, Some(MembershipDetails {}));
+
+			Self::deposit_event(Event::<T>::MemberAdded {
+				club_id,
+				member: requester,
+				membership_expiry_block: expiry_block,
+			});
+
+			Ok(())
+		}
+	}
+}

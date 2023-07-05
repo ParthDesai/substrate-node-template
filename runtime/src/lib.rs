@@ -24,6 +24,7 @@ use sp_version::NativeVersion;
 use sp_version::RuntimeVersion;
 
 // A few exports that help ease life for downstream crates.
+use frame_support::PalletId;
 pub use frame_support::{
 	construct_runtime, parameter_types,
 	traits::{
@@ -38,6 +39,7 @@ pub use frame_support::{
 	StorageValue,
 };
 pub use frame_system::Call as SystemCall;
+use frame_system::EnsureRoot;
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_timestamp::Call as TimestampCall;
 use pallet_transaction_payment::{ConstFeeMultiplier, CurrencyAdapter, Multiplier};
@@ -203,6 +205,20 @@ impl frame_system::Config for Runtime {
 	type MaxConsumers = frame_support::traits::ConstU32<16>;
 }
 
+parameter_types! {
+	pub const ClubPalletId: PalletId = PalletId(*b"clubtrsy");
+	pub const BlocksPerYear: BlockNumber = 10u32;
+}
+
+impl pallet_club::Config for Runtime {
+	type Currency = Balances;
+	type RuntimeEvent = RuntimeEvent;
+	type WeightInfo = ();
+	type PalletId = ClubPalletId;
+	type BlocksPerYear = BlocksPerYear;
+	type RootOrigin = EnsureRoot<AccountId>;
+}
+
 impl pallet_aura::Config for Runtime {
 	type AuthorityId = AuraId;
 	type DisabledValidators = ();
@@ -290,6 +306,7 @@ construct_runtime!(
 		Sudo: pallet_sudo,
 		// Include the custom logic from the pallet-template in the runtime.
 		TemplateModule: pallet_template,
+		Club: pallet_club,
 	}
 );
 
