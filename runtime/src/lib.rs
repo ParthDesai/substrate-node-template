@@ -208,6 +208,8 @@ impl frame_system::Config for Runtime {
 parameter_types! {
 	pub const ClubPalletId: PalletId = PalletId(*b"clubtrsy");
 	pub const BlocksPerYear: BlockNumber = 10u32;
+	pub const ClubCreationFee: Balance = 100;
+	pub const MaxNumberOfYears: u8 = 100;
 }
 
 impl pallet_club::Config for Runtime {
@@ -216,7 +218,8 @@ impl pallet_club::Config for Runtime {
 	type WeightInfo = ();
 	type PalletId = ClubPalletId;
 	type BlocksPerYear = BlocksPerYear;
-	type RootOrigin = EnsureRoot<AccountId>;
+	type ClubCreationFee = ClubCreationFee;
+	type MaxNumberOfYears = MaxNumberOfYears;
 }
 
 impl pallet_aura::Config for Runtime {
