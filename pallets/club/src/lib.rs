@@ -76,13 +76,11 @@ pub mod pallet {
 		pub expense_per_year: Balance,
 	}
 
-	// Empty for now
-	#[derive(Copy, Clone, Eq, PartialEq, Encode, Decode, MaxEncodedLen, TypeInfo)]
+	#[derive(Debug, Copy, Clone, Eq, PartialEq, Encode, Decode, MaxEncodedLen, TypeInfo)]
 	pub struct MembershipDetails {
 		pub is_renewal: bool
 	}
 
-	// Empty for now
 	#[derive(Copy, Clone, Eq, PartialEq, Encode, Decode, MaxEncodedLen, TypeInfo)]
 	pub struct ExpirationDetails {
 		pub previous_membership_details: MembershipDetails,
