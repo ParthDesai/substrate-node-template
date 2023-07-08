@@ -70,25 +70,25 @@ pub mod pallet {
 		}
 	}
 
-	#[derive(Copy, Clone, Eq, PartialEq, Encode, Decode, MaxEncodedLen, TypeInfo)]
+	#[derive(Debug, Copy, Clone, Eq, PartialEq, Encode, Decode, MaxEncodedLen, TypeInfo)]
 	pub struct ClubDetails<AccountId, Balance> {
-		owner: AccountId,
-		expense_per_year: Balance,
+		pub owner: AccountId,
+		pub expense_per_year: Balance,
 	}
 
 	// Empty for now
 	#[derive(Copy, Clone, Eq, PartialEq, Encode, Decode, MaxEncodedLen, TypeInfo)]
 	pub struct MembershipDetails {
-		is_renewal: bool
+		pub is_renewal: bool
 	}
 
 	// Empty for now
 	#[derive(Copy, Clone, Eq, PartialEq, Encode, Decode, MaxEncodedLen, TypeInfo)]
 	pub struct ExpirationDetails {
-		previous_membership_details: MembershipDetails,
+		pub previous_membership_details: MembershipDetails,
 	}
 
-	#[derive(Copy, Clone, Eq, PartialEq, Encode, Decode, MaxEncodedLen, TypeInfo)]
+	#[derive(Debug, Copy, Clone, Eq, PartialEq, Encode, Decode, MaxEncodedLen, TypeInfo)]
 	pub struct MembershipRequestDetails<Balance> {
 		pub amount_paid: Balance,
 		pub time_in_year: u8,
@@ -280,7 +280,7 @@ pub mod pallet {
 		// transfer
 		#[pallet::weight(50_000_000)]
 		#[pallet::call_index(2)]
-		pub fn transfer_club_owneship(
+		pub fn transfer_club_ownership(
 			origin: OriginFor<T>,
 			club_id: u64,
 			new_owner: T::AccountId,

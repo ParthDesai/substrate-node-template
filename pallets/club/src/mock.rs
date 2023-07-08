@@ -90,15 +90,19 @@ impl pallet_club::Config for Test {
 	type MaxNumberOfYears = MaxNumberOfYears;
 }
 
-pub(crate) fn new_test_ext() -> sp_io::TestExternalities {
+pub(crate) fn new_test_ext(root_account: AccountId, club_creation_fee: Balance, balances: Vec<(AccountId, Balance)>) -> sp_io::TestExternalities {
 	let mut storage = frame_system::GenesisConfig::default().build_storage::<Test>().unwrap();
 
-	let config: pallet_club::GenesisConfig<Test> = pallet_club::GenesisConfig {
-		root_account: Some(1),
-		club_creation_fee: 1u128
+	let balance_config: pallet_balances::GenesisConfig<Test> = pallet_balances::GenesisConfig {
+		balances
 	};
+	balance_config.assimilate_storage(&mut storage).unwrap();
 
-	config.assimilate_storage(&mut storage).unwrap();
+	let club_config: pallet_club::GenesisConfig<Test> = pallet_club::GenesisConfig {
+		root_account: Some(root_account),
+		club_creation_fee
+	};
+	club_config.assimilate_storage(&mut storage).unwrap();
 
 	let mut ext: sp_io::TestExternalities = storage.into();
 	ext.execute_with(|| System::set_block_number(1));
