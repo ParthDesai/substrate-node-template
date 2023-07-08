@@ -8,6 +8,12 @@ pub use pallet::*;
 use sp_core::ConstU64;
 use sp_runtime::traits::CheckedMul;
 
+#[cfg(test)]
+mod mock;
+
+#[cfg(test)]
+mod tests;
+
 pub(crate) type BalanceOf<T> =
 	<<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
 
@@ -34,13 +40,34 @@ pub mod pallet {
 		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 		/// Type representing the weight of this pallet
 		type WeightInfo: WeightInfo;
-		/// Root account
-		type RootOrigin: EnsureOrigin<Self::RuntimeOrigin>;
 		/// Number of blocks to make one year
 		type BlocksPerYear: Get<<Self as frame_system::Config>::BlockNumber>;
 		/// ID of the pallet which is used to derive sovereign account id of the pallet
 		#[pallet::constant]
 		type PalletId: Get<PalletId>;
+		/// Club creation fee
+		#[pallet::constant]
+		type ClubCreationFee: Get<BalanceOf<Self>>;
+		/// Max number of years
+		#[pallet::constant]
+		type MaxNumberOfYears: Get<u8>;
+	}
+
+	#[pallet::genesis_config]
+	#[derive(frame_support::DefaultNoBound)]
+	pub struct GenesisConfig<T: Config> {
+		pub root_account: Option<T::AccountId>,
+		pub club_creation_fee: BalanceOf<T>
+	}
+
+	#[pallet::genesis_build]
+	impl<T: Config> GenesisBuild<T> for GenesisConfig<T> {
+		fn build(&self) {
+			assert!(self.root_account.is_some(), "Root account must be provided");
+			RootAccount::<T>::set(self.root_account.clone());
+			assert!(self.club_creation_fee >= T::Currency::minimum_balance(), "Club creation fee: {:?} must be greater than min balance: {:?}", self.club_creation_fee, T::Currency::minimum_balance());
+			ClubCreationFee::<T>::set(self.club_creation_fee);
+		}
 	}
 
 	#[derive(Copy, Clone, Eq, PartialEq, Encode, Decode, MaxEncodedLen, TypeInfo)]
@@ -51,7 +78,9 @@ pub mod pallet {
 
 	// Empty for now
 	#[derive(Copy, Clone, Eq, PartialEq, Encode, Decode, MaxEncodedLen, TypeInfo)]
-	pub struct MembershipDetails {}
+	pub struct MembershipDetails {
+		is_renewal: bool
+	}
 
 	// Empty for now
 	#[derive(Copy, Clone, Eq, PartialEq, Encode, Decode, MaxEncodedLen, TypeInfo)]
@@ -63,7 +92,14 @@ pub mod pallet {
 	pub struct MembershipRequestDetails<Balance> {
 		pub amount_paid: Balance,
 		pub time_in_year: u8,
+		pub is_renewal: bool
 	}
+
+	#[pallet::storage]
+	pub(super) type RootAccount<T: Config> = StorageValue<_, T::AccountId>;
+
+	#[pallet::storage]
+	pub(super) type ClubCreationFee<T: Config> = StorageValue<_, BalanceOf<T>, ValueQuery>;
 
 	#[pallet::storage]
 	pub(super) type NextClubId<T: Config> = StorageValue<_, u64, ValueQuery, ConstU64<1>>;
@@ -107,34 +143,46 @@ pub mod pallet {
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
 		/// A new club is created. [club_id, club_owner]
-		ClubCreated { club_id: u64, club_owner: T::AccountId },
+		ClubCreated { club_id: u64, club_owner: T::AccountId, annual_expense: BalanceOf<T> },
 		/// Club owner is transferred. [club_id, new_owner]
 		ClubOwnerChanged { club_id: u64, old_owner: T::AccountId, new_owner: T::AccountId },
-		/// Annual expense for club membership is set. [club_id, annual_expense]
-		AnnualExpenseSet { club_id: u64, new_expense: BalanceOf<T> },
+		/// Annual expense for club membership is set. [club_id, old_expense, new_expense]
+		AnnualExpenseSet { club_id: u64, old_annual_expense: BalanceOf<T>, new_annual_expense: BalanceOf<T> },
+		/// A membership was requested
+		MembershipRequested { club_id: u64, requester: T::AccountId, expense_to_be_charged: BalanceOf<T>, time_in_year: u8, is_renewal: bool },
 		/// A member is added to the club. [club_id, member]
 		MemberAdded { club_id: u64, member: T::AccountId, membership_expiry_block: T::BlockNumber },
 		/// A member's membership is expired. [club_id, member]
 		MembershipExpired { club_id: u64, member: T::AccountId },
+		/// A member's membership is renewed
+		MembershipRenewed { club_id: u64, member: T::AccountId }
 	}
 
 	// Errors inform users that something went wrong.
 	#[pallet::error]
 	pub enum Error<T> {
+		/// No Root account configured at genesis
+		NoRootConfiguredAtGenesis,
+		/// Not a root account
+		UserIsNotRoot,
 		/// No club found
 		ClubNotFound,
 		/// User is not club owner
 		NotClubOwner,
-		/// Not Club root
-		NotClubRoot,
 		/// User is already club member
 		AlreadyMember,
+		/// User is expired member
+		ExpiredMember,
+		/// User has no membership expiration record
+		NoMembershipExpirationFound,
 		/// Member is not found
 		MemberNotFound,
 		/// Membership already requested
 		MembershipAlreadyRequested,
 		/// Membership request not found
 		MembershipRequestNotFound,
+		/// Membership request for more than max number of years
+		MembershipTimeExceeded
 	}
 
 	impl<T: Config> Pallet<T> {
@@ -169,6 +217,7 @@ pub mod pallet {
 					continue
 				}
 
+				ClubMembership::<T>::remove(&account_id, &club_id);
 				ExpiredMemberships::<T>::set(
 					&account_id,
 					club_id,
@@ -196,16 +245,33 @@ pub mod pallet {
 			owner: T::AccountId,
 			expense_per_year: BalanceOf<T>,
 		) -> DispatchResult {
-			T::RootOrigin::try_origin(origin).map_err(|_e| Error::<T>::NotClubRoot)?;
+			let account_id = ensure_signed(origin)?;
+
+			let maybe_root_account = RootAccount::<T>::get();
+			if maybe_root_account.is_none() {
+				return Err(Error::<T>::NoRootConfiguredAtGenesis.into());
+			}
+			let root_account = maybe_root_account.unwrap();
+			if account_id != root_account {
+				return Err(Error::<T>::UserIsNotRoot.into());
+			}
 
 			let club = ClubDetails { owner: owner.clone(), expense_per_year };
 
 			let next_id = NextClubId::<T>::get();
 
+			let club_creation_fee = ClubCreationFee::<T>::get();
+			T::Currency::transfer(
+				&account_id,
+				&Self::account_id(),
+				club_creation_fee,
+				ExistenceRequirement::KeepAlive,
+			)?;
+
 			Clubs::<T>::set(next_id, Some(club));
 			NextClubId::<T>::set(next_id + 1);
 
-			Self::deposit_event(Event::<T>::ClubCreated { club_id: next_id, club_owner: owner });
+			Self::deposit_event(Event::<T>::ClubCreated { club_id: next_id, club_owner: owner, annual_expense: expense_per_year });
 			Ok(())
 		}
 
@@ -223,12 +289,12 @@ pub mod pallet {
 
 			let maybe_club = Clubs::<T>::get(club_id);
 			if maybe_club.is_none() {
-				return Err(Error::<T>::ClubNotFound.into())
+				return Err(Error::<T>::ClubNotFound.into());
 			}
 
 			let mut club = maybe_club.unwrap();
 			if club.owner != account_id {
-				return Err(Error::<T>::NotClubOwner.into())
+				return Err(Error::<T>::NotClubOwner.into());
 			}
 			club.owner = new_owner.clone();
 			Clubs::<T>::set(club_id, Some(club));
@@ -244,6 +310,30 @@ pub mod pallet {
 
 		#[pallet::weight(50_000_000)]
 		#[pallet::call_index(3)]
+		pub fn change_club_expense(origin: OriginFor<T>, club_id: u64, new_expense_per_year: BalanceOf<T>) -> DispatchResult {
+			let account_id = ensure_signed(origin)?;
+
+			let maybe_club = Clubs::<T>::get(club_id);
+			if maybe_club.is_none() {
+				return Err(Error::<T>::ClubNotFound.into())
+			}
+
+			let mut club = maybe_club.unwrap();
+			if club.owner != account_id {
+				return Err(Error::<T>::NotClubOwner.into())
+			}
+
+			let old_annual_expense = club.expense_per_year;
+			club.expense_per_year = new_expense_per_year;
+			Clubs::<T>::set(club_id, Some(club));
+
+			Self::deposit_event(Event::<T>::AnnualExpenseSet { club_id, new_annual_expense: new_expense_per_year, old_annual_expense });
+
+			Ok(())
+		}
+
+		#[pallet::weight(50_000_000)]
+		#[pallet::call_index(4)]
 		pub fn request_membership(
 			origin: OriginFor<T>,
 			club_id: u64,
@@ -256,9 +346,21 @@ pub mod pallet {
 			}
 			let club = maybe_club.unwrap();
 
-			let maybe_existing_request = MembershipRequest::<T>::get(&account_id, club_id);
-			if maybe_existing_request.is_some() {
-				return Err(Error::<T>::MembershipAlreadyRequested.into())
+			if let Some(_) = MembershipRequest::<T>::get(&account_id, club_id) {
+				return Err(Error::<T>::MembershipAlreadyRequested.into());
+			}
+
+			if let Some(_) = ClubMembership::<T>::get(&account_id, club_id) {
+				return Err(Error::<T>::AlreadyMember.into());
+			}
+
+			if let Some(_) = ExpiredMemberships::<T>::get(&account_id, club_id) {
+				return Err(Error::<T>::ExpiredMember.into());
+			}
+
+			let max_number_of_years = T::MaxNumberOfYears::get();
+			if time_in_year > max_number_of_years {
+				return Err(Error::<T>::MembershipTimeExceeded.into());
 			}
 
 			let time_of_year_as_balance = BalanceOf::<T>::try_from(time_in_year)
@@ -274,8 +376,69 @@ pub mod pallet {
 				ExistenceRequirement::KeepAlive,
 			)?;
 			let request_details =
-				MembershipRequestDetails { amount_paid: expense_to_be_charged, time_in_year };
+				MembershipRequestDetails { amount_paid: expense_to_be_charged, time_in_year, is_renewal: false };
 			MembershipRequest::<T>::set(&account_id, club_id, Some(request_details));
+
+			Self::deposit_event(Event::<T>::MembershipRequested {
+				club_id,
+				requester: account_id,
+				expense_to_be_charged,
+				time_in_year,
+				is_renewal: false
+			});
+
+			Ok(())
+		}
+
+
+		#[pallet::weight(50_000_000)]
+		#[pallet::call_index(5)]
+		pub fn request_membership_renewal(origin: OriginFor<T>, club_id: u64, time_in_year: u8) -> DispatchResult {
+			let account_id = ensure_signed(origin)?;
+			let maybe_club = Clubs::<T>::get(club_id);
+			if maybe_club.is_none() {
+				return Err(Error::<T>::ClubNotFound.into())
+			}
+			let club = maybe_club.unwrap();
+
+			if let Some(_) = MembershipRequest::<T>::get(&account_id, club_id) {
+				return Err(Error::<T>::MembershipAlreadyRequested.into());
+			}
+
+			if let Some(_) = ClubMembership::<T>::get(&account_id, club_id) {
+				return Err(Error::<T>::AlreadyMember.into());
+			}
+
+			let maybe_expired_membership = ExpiredMemberships::<T>::get(&account_id, club_id);
+			if maybe_expired_membership.is_none() {
+				return Err(Error::<T>::NoMembershipExpirationFound.into());
+			}
+
+			let time_of_year_as_balance = BalanceOf::<T>::try_from(time_in_year)
+				.map_err(|_| DispatchError::Arithmetic(ArithmeticError::Overflow))?;
+			let expense_to_be_charged = club
+				.expense_per_year
+				.checked_mul(&time_of_year_as_balance)
+				.ok_or(DispatchError::Arithmetic(ArithmeticError::Overflow))?;
+			T::Currency::transfer(
+				&account_id,
+				&Self::account_id(),
+				expense_to_be_charged,
+				ExistenceRequirement::KeepAlive,
+			)?;
+
+			ExpiredMemberships::<T>::remove(&account_id, &club_id);
+			let request_details =
+				MembershipRequestDetails { amount_paid: expense_to_be_charged, time_in_year, is_renewal: true };
+			MembershipRequest::<T>::set(&account_id, club_id, Some(request_details));
+
+			Self::deposit_event(Event::<T>::MembershipRequested {
+				club_id,
+				requester: account_id,
+				expense_to_be_charged,
+				time_in_year,
+				is_renewal: true
+			});
 
 			Ok(())
 		}
@@ -287,7 +450,7 @@ pub mod pallet {
 		// add user as a member
 		// set expiration data
 		#[pallet::weight(50_000_000)]
-		#[pallet::call_index(4)]
+		#[pallet::call_index(6)]
 		pub fn add_member(
 			origin: OriginFor<T>,
 			club_id: u64,
@@ -329,7 +492,9 @@ pub mod pallet {
 				Some((requester.clone(), club_id)),
 			);
 			MembershipRequest::<T>::remove(&requester, club_id);
-			ClubMembership::<T>::set(&requester, club_id, Some(MembershipDetails {}));
+			ClubMembership::<T>::set(&requester, club_id, Some(MembershipDetails {
+				is_renewal: membership_request.is_renewal
+			}));
 
 			Self::deposit_event(Event::<T>::MemberAdded {
 				club_id,
