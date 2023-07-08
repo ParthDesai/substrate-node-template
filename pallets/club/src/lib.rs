@@ -81,7 +81,7 @@ pub mod pallet {
 		pub is_renewal: bool
 	}
 
-	#[derive(Copy, Clone, Eq, PartialEq, Encode, Decode, MaxEncodedLen, TypeInfo)]
+	#[derive(Debug, Copy, Clone, Eq, PartialEq, Encode, Decode, MaxEncodedLen, TypeInfo)]
 	pub struct ExpirationDetails {
 		pub previous_membership_details: MembershipDetails,
 	}
@@ -410,6 +410,11 @@ pub mod pallet {
 			let maybe_expired_membership = ExpiredMemberships::<T>::get(&account_id, club_id);
 			if maybe_expired_membership.is_none() {
 				return Err(Error::<T>::NoMembershipExpirationFound.into());
+			}
+
+			let max_number_of_years = T::MaxNumberOfYears::get();
+			if time_in_year > max_number_of_years {
+				return Err(Error::<T>::MembershipTimeExceeded.into());
 			}
 
 			let time_of_year_as_balance = BalanceOf::<T>::try_from(time_in_year)

@@ -2,7 +2,8 @@ use crate::mock::{new_test_ext, RuntimeEvent, RuntimeOrigin, System, Test};
 use crate::mock::{Club, Balances};
 use crate::{Event, Error, ClubDetails, MembershipRequestDetails, MembershipDetails, ExpirationDetails, ExpirationsPerBlock, Config, ClubMemberFutureExpirations};
 use frame_support::{assert_noop, assert_ok};
-use sp_runtime::TokenError;
+use frame_support::traits::Hooks;
+use sp_runtime::{TokenError, generic::Digest};
 use crate::pallet::{Clubs, NextClubId, MembershipRequest, ClubMembership, ExpiredMemberships};
 
 
@@ -138,6 +139,58 @@ fn request_membership_test() {
 }
 
 #[test]
+fn request_membership_renewal_test() {
+	new_test_ext(1, 1, vec![(1, 100), (2, 100), (3, 200)]).execute_with(|| {
+		// Only root account can create club
+		assert_ok!(Club::create_club(RuntimeOrigin::signed(1), 2, 100));
+
+		// Club id must exists
+		assert_noop!(Club::request_membership_renewal(RuntimeOrigin::signed(3), 2, 100), Error::<Test>::ClubNotFound);
+
+		// If membership is already requested it should fail
+		MembershipRequest::<Test>::set(3, 1, Some(MembershipRequestDetails {
+			amount_paid: 100,
+			time_in_year: 1,
+			is_renewal: true
+		}));
+		assert_noop!(Club::request_membership_renewal(RuntimeOrigin::signed(3), 1, 100), Error::<Test>::MembershipAlreadyRequested);
+		MembershipRequest::<Test>::remove(3, 1);
+
+		// If already member, it cannot be member again
+		ClubMembership::<Test>::set(3, 1, Some(MembershipDetails { is_renewal: true }));
+		assert_noop!(Club::request_membership_renewal(RuntimeOrigin::signed(3), 1, 100), Error::<Test>::AlreadyMember);
+		ClubMembership::<Test>::remove(3, 1);
+
+		// If there is not expired membership, it cannot request new membership
+		assert_noop!(Club::request_membership_renewal(RuntimeOrigin::signed(3), 1, 100), Error::<Test>::NoMembershipExpirationFound);
+		ExpiredMemberships::<Test>::remove(3, 1);
+
+		// Membership time cannot be more than max number of years (value: 100)
+		ExpiredMemberships::<Test>::set(3, 1, Some(ExpirationDetails { previous_membership_details: MembershipDetails { is_renewal: false } }));
+		assert_noop!(Club::request_membership_renewal(RuntimeOrigin::signed(3), 1, 150), Error::<Test>::MembershipTimeExceeded);
+		ExpiredMemberships::<Test>::remove(3, 1);
+
+		ExpiredMemberships::<Test>::set(3, 1, Some(ExpirationDetails { previous_membership_details: MembershipDetails { is_renewal: false } }));
+		assert_ok!(Club::request_membership_renewal(RuntimeOrigin::signed(3), 1, 1));
+
+		// Storage check
+		assert_eq!(MembershipRequest::<Test>::get(3, 1), Some(MembershipRequestDetails { amount_paid: 1*100, time_in_year: 1, is_renewal: true }));
+
+		// Balance check
+		assert_eq!(Balances::free_balance(3), 200 - (1*100));
+
+		// Event check
+		System::assert_last_event(RuntimeEvent::Club(Event::MembershipRequested {
+			club_id: 1,
+			requester: 3,
+			expense_to_be_charged: 1*100,
+			time_in_year: 1,
+			is_renewal: true
+		}));
+	});
+}
+
+#[test]
 fn add_member_test() {
 	new_test_ext(1, 1, vec![(1, 100), (2, 100), (3, 200), (4, 200)]).execute_with(|| {
 		// Only root account can create club
@@ -189,5 +242,67 @@ fn add_member_test() {
 			member: 4,
 			membership_expiry_block: 100 + <Test as Config>::BlocksPerYear::get()*1
 		}));
+	});
+}
+
+#[test]
+fn block_initialization_test() {
+	new_test_ext(1, 1, vec![(1, 100), (2, 100), (3, 200), (4, 200), (5, 200)]).execute_with(|| {
+		// Only root account can create club
+		assert_ok!(Club::create_club(RuntimeOrigin::signed(1), 2, 100));
+
+		// AccountId: 3 requested membership
+		assert_ok!(Club::request_membership(RuntimeOrigin::signed(3), 1, 1));
+
+		// AccountId: 4 requested membership
+		assert_ok!(Club::request_membership(RuntimeOrigin::signed(4), 1, 1));
+
+		// Setting block number
+		System::set_block_number(100);
+
+		// Addition of AccountId: 3 as member
+		assert_ok!(Club::add_member(RuntimeOrigin::signed(2), 1, 3));
+
+		// Addition of AccountId: 4 as member
+		assert_ok!(Club::add_member(RuntimeOrigin::signed(2), 1, 4));
+
+		// Before the designated block, no processing happens
+		Club::on_initialize(101);
+		assert_eq!(ExpirationsPerBlock::<Test>::get(100 + <Test as Config>::BlocksPerYear::get()*1), Some(2));
+		assert_eq!(ClubMemberFutureExpirations::<Test>::get((100 + <Test as Config>::BlocksPerYear::get()*1, 1)), Some((3, 1)));
+		assert_eq!(ClubMemberFutureExpirations::<Test>::get((100 + <Test as Config>::BlocksPerYear::get()*1, 2)), Some((4, 1)));
+		assert_eq!(ClubMembership::<Test>::get(3, 1), Some(MembershipDetails { is_renewal: false }));
+		assert_eq!(ClubMembership::<Test>::get(4, 1), Some(MembershipDetails { is_renewal: false }));
+
+		// At the designated block's initialization, changes should happen
+		Club::on_initialize(100 + <Test as Config>::BlocksPerYear::get()*1);
+
+		// Storage changes
+		assert_eq!(ExpirationsPerBlock::<Test>::get(100 + <Test as Config>::BlocksPerYear::get()*1), None);
+		assert_eq!(ClubMemberFutureExpirations::<Test>::get((100 + <Test as Config>::BlocksPerYear::get()*1, 1)), None);
+		assert_eq!(ClubMemberFutureExpirations::<Test>::get((100 + <Test as Config>::BlocksPerYear::get()*1, 2)), None);
+		assert_eq!(ClubMembership::<Test>::get(3, 1), None);
+		assert_eq!(ExpiredMemberships::<Test>::get(3, 1), Some(ExpirationDetails {
+			previous_membership_details: MembershipDetails {
+				is_renewal: false
+			},
+		}));
+		assert_eq!(ClubMembership::<Test>::get(4, 1), None);
+		assert_eq!(ExpiredMemberships::<Test>::get(4, 1), Some(ExpirationDetails {
+			previous_membership_details: MembershipDetails {
+				is_renewal: false
+			},
+		}));
+
+		// Events check
+		System::assert_has_event(RuntimeEvent::Club(Event::MembershipExpired {
+			club_id: 1,
+			member: 3
+		}));
+		System::assert_last_event(RuntimeEvent::Club(Event::MembershipExpired {
+			club_id: 1,
+			member: 4
+		}));
+
 	});
 }
