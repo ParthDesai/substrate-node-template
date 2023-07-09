@@ -1,4 +1,5 @@
 use crate as pallet_club;
+use crate::ClubWeightInfo;
 use frame_support::{
 	parameter_types,
 	traits::{ConstU128, ConstU16, ConstU64, GenesisBuild},
@@ -9,7 +10,6 @@ use sp_runtime::{
 	testing::Header,
 	traits::{BlakeTwo256, IdentityLookup},
 };
-use crate::ClubWeightInfo;
 
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;

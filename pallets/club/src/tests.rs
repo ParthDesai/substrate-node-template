@@ -5,7 +5,7 @@ use crate::{
 	ExpirationsPerBlock, MembershipDetails, MembershipRequestDetails,
 };
 use frame_support::{assert_noop, assert_ok, traits::Hooks};
-use sp_runtime::{generic::Digest, TokenError};
+use sp_runtime::TokenError;
 
 #[test]
 fn club_creation_test() {
@@ -165,21 +165,17 @@ fn request_membership_test() {
 		// Storage check
 		assert_eq!(
 			MembershipRequest::<Test>::get(3, 1),
-			Some(MembershipRequestDetails {
-				amount_paid: 1 * 100,
-				time_in_year: 1,
-				is_renewal: false
-			})
+			Some(MembershipRequestDetails { amount_paid: 100, time_in_year: 1, is_renewal: false })
 		);
 
 		// Balance check
-		assert_eq!(Balances::free_balance(3), 200 - (1 * 100));
+		assert_eq!(Balances::free_balance(3), 200 - 100);
 
 		// Event check
 		System::assert_last_event(RuntimeEvent::Club(Event::MembershipRequested {
 			club_id: 1,
 			requester: 3,
-			expense_to_be_charged: 1 * 100,
+			expense_to_be_charged: 100,
 			time_in_year: 1,
 			is_renewal: false,
 		}));
@@ -251,21 +247,17 @@ fn request_membership_renewal_test() {
 		// Storage check
 		assert_eq!(
 			MembershipRequest::<Test>::get(3, 1),
-			Some(MembershipRequestDetails {
-				amount_paid: 1 * 100,
-				time_in_year: 1,
-				is_renewal: true
-			})
+			Some(MembershipRequestDetails { amount_paid: 100, time_in_year: 1, is_renewal: true })
 		);
 
 		// Balance check
-		assert_eq!(Balances::free_balance(3), 200 - (1 * 100));
+		assert_eq!(Balances::free_balance(3), 200 - 100);
 
 		// Event check
 		System::assert_last_event(RuntimeEvent::Club(Event::MembershipRequested {
 			club_id: 1,
 			requester: 3,
-			expense_to_be_charged: 1 * 100,
+			expense_to_be_charged: 100,
 			time_in_year: 1,
 			is_renewal: true,
 		}));
@@ -298,12 +290,12 @@ fn add_member_test() {
 
 		// Storage checks
 		assert_eq!(
-			ExpirationsPerBlock::<Test>::get(100 + <Test as Config>::BlocksPerYear::get() * 1),
+			ExpirationsPerBlock::<Test>::get(100 + <Test as Config>::BlocksPerYear::get()),
 			Some(1)
 		);
 		assert_eq!(
 			ClubMemberFutureExpirations::<Test>::get((
-				100 + <Test as Config>::BlocksPerYear::get() * 1,
+				100 + <Test as Config>::BlocksPerYear::get(),
 				1
 			)),
 			Some((3, 1))
@@ -318,7 +310,7 @@ fn add_member_test() {
 		System::assert_last_event(RuntimeEvent::Club(Event::MemberAdded {
 			club_id: 1,
 			member: 3,
-			membership_expiry_block: 100 + <Test as Config>::BlocksPerYear::get() * 1,
+			membership_expiry_block: 100 + <Test as Config>::BlocksPerYear::get(),
 		}));
 
 		// Adding another member at same block, should increment block expiration count
@@ -326,12 +318,12 @@ fn add_member_test() {
 
 		// Storage checks
 		assert_eq!(
-			ExpirationsPerBlock::<Test>::get(100 + <Test as Config>::BlocksPerYear::get() * 1),
+			ExpirationsPerBlock::<Test>::get(100 + <Test as Config>::BlocksPerYear::get()),
 			Some(2)
 		);
 		assert_eq!(
 			ClubMemberFutureExpirations::<Test>::get((
-				100 + <Test as Config>::BlocksPerYear::get() * 1,
+				100 + <Test as Config>::BlocksPerYear::get(),
 				2
 			)),
 			Some((4, 1))
@@ -346,7 +338,7 @@ fn add_member_test() {
 		System::assert_last_event(RuntimeEvent::Club(Event::MemberAdded {
 			club_id: 1,
 			member: 4,
-			membership_expiry_block: 100 + <Test as Config>::BlocksPerYear::get() * 1,
+			membership_expiry_block: 100 + <Test as Config>::BlocksPerYear::get(),
 		}));
 	});
 }
@@ -375,19 +367,19 @@ fn block_initialization_test() {
 		// Before the designated block, no processing happens
 		Club::on_initialize(101);
 		assert_eq!(
-			ExpirationsPerBlock::<Test>::get(100 + <Test as Config>::BlocksPerYear::get() * 1),
+			ExpirationsPerBlock::<Test>::get(100 + <Test as Config>::BlocksPerYear::get()),
 			Some(2)
 		);
 		assert_eq!(
 			ClubMemberFutureExpirations::<Test>::get((
-				100 + <Test as Config>::BlocksPerYear::get() * 1,
+				100 + <Test as Config>::BlocksPerYear::get(),
 				1
 			)),
 			Some((3, 1))
 		);
 		assert_eq!(
 			ClubMemberFutureExpirations::<Test>::get((
-				100 + <Test as Config>::BlocksPerYear::get() * 1,
+				100 + <Test as Config>::BlocksPerYear::get(),
 				2
 			)),
 			Some((4, 1))
@@ -402,23 +394,23 @@ fn block_initialization_test() {
 		);
 
 		// At the designated block's initialization, changes should happen
-		Club::on_initialize(100 + <Test as Config>::BlocksPerYear::get() * 1);
+		Club::on_initialize(100 + <Test as Config>::BlocksPerYear::get());
 
 		// Storage changes
 		assert_eq!(
-			ExpirationsPerBlock::<Test>::get(100 + <Test as Config>::BlocksPerYear::get() * 1),
+			ExpirationsPerBlock::<Test>::get(100 + <Test as Config>::BlocksPerYear::get()),
 			None
 		);
 		assert_eq!(
 			ClubMemberFutureExpirations::<Test>::get((
-				100 + <Test as Config>::BlocksPerYear::get() * 1,
+				100 + <Test as Config>::BlocksPerYear::get(),
 				1
 			)),
 			None
 		);
 		assert_eq!(
 			ClubMemberFutureExpirations::<Test>::get((
-				100 + <Test as Config>::BlocksPerYear::get() * 1,
+				100 + <Test as Config>::BlocksPerYear::get(),
 				2
 			)),
 			None

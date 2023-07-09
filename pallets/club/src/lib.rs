@@ -235,7 +235,7 @@ pub mod pallet {
 					continue
 				}
 
-				ClubMembership::<T>::remove(&account_id, &club_id);
+				ClubMembership::<T>::remove(&account_id, club_id);
 				ExpiredMemberships::<T>::set(
 					&account_id,
 					club_id,
@@ -378,15 +378,15 @@ pub mod pallet {
 			}
 			let club = maybe_club.unwrap();
 
-			if let Some(_) = MembershipRequest::<T>::get(&account_id, club_id) {
+			if MembershipRequest::<T>::get(&account_id, club_id).is_some() {
 				return Err(Error::<T>::MembershipAlreadyRequested.into())
 			}
 
-			if let Some(_) = ClubMembership::<T>::get(&account_id, club_id) {
+			if ClubMembership::<T>::get(&account_id, club_id).is_some() {
 				return Err(Error::<T>::AlreadyMember.into())
 			}
 
-			if let Some(_) = ExpiredMemberships::<T>::get(&account_id, club_id) {
+			if ExpiredMemberships::<T>::get(&account_id, club_id).is_some() {
 				return Err(Error::<T>::ExpiredMember.into())
 			}
 
@@ -440,11 +440,11 @@ pub mod pallet {
 			}
 			let club = maybe_club.unwrap();
 
-			if let Some(_) = MembershipRequest::<T>::get(&account_id, club_id) {
+			if MembershipRequest::<T>::get(&account_id, club_id).is_some() {
 				return Err(Error::<T>::MembershipAlreadyRequested.into())
 			}
 
-			if let Some(_) = ClubMembership::<T>::get(&account_id, club_id) {
+			if ClubMembership::<T>::get(&account_id, club_id).is_some() {
 				return Err(Error::<T>::AlreadyMember.into())
 			}
 
@@ -471,7 +471,7 @@ pub mod pallet {
 				ExistenceRequirement::KeepAlive,
 			)?;
 
-			ExpiredMemberships::<T>::remove(&account_id, &club_id);
+			ExpiredMemberships::<T>::remove(&account_id, club_id);
 			let request_details = MembershipRequestDetails {
 				amount_paid: expense_to_be_charged,
 				time_in_year,
