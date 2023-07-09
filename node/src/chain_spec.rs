@@ -1,6 +1,6 @@
 use node_template_runtime::{
-	AccountId, AuraConfig, BalancesConfig, GenesisConfig, GrandpaConfig, Signature, SudoConfig,
-	SystemConfig, WASM_BINARY, ClubConfig
+	AccountId, AuraConfig, BalancesConfig, ClubConfig, GenesisConfig, GrandpaConfig, Signature,
+	SudoConfig, SystemConfig, WASM_BINARY,
 };
 use sc_service::ChainType;
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
@@ -152,9 +152,6 @@ fn testnet_genesis(
 			key: Some(root_key.clone()),
 		},
 		transaction_payment: Default::default(),
-		club: ClubConfig {
-			root_account: Some(root_key),
-			club_creation_fee: 500
-		}
+		club: ClubConfig { root_account: Some(root_key), club_creation_fee: 500 },
 	}
 }

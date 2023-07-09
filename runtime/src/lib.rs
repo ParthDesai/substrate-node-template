@@ -39,7 +39,6 @@ pub use frame_support::{
 	StorageValue,
 };
 pub use frame_system::Call as SystemCall;
-use frame_system::EnsureRoot;
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_timestamp::Call as TimestampCall;
 use pallet_transaction_payment::{ConstFeeMultiplier, CurrencyAdapter, Multiplier};
@@ -215,7 +214,7 @@ parameter_types! {
 impl pallet_club::Config for Runtime {
 	type Currency = Balances;
 	type RuntimeEvent = RuntimeEvent;
-	type WeightInfo = ();
+	type WeightInfo = pallet_club::ClubWeightInfo<Runtime>;
 	type PalletId = ClubPalletId;
 	type BlocksPerYear = BlocksPerYear;
 	type ClubCreationFee = ClubCreationFee;
@@ -357,6 +356,7 @@ mod benches {
 		[pallet_balances, Balances]
 		[pallet_timestamp, Timestamp]
 		[pallet_template, TemplateModule]
+		[pallet_club, Club]
 	);
 }
 

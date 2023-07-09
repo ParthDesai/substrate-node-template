@@ -1,11 +1,15 @@
 use crate as pallet_club;
-use frame_support::traits::{ConstU16, ConstU64, ConstU128, GenesisBuild};
-use frame_support::{parameter_types, PalletId};
+use frame_support::{
+	parameter_types,
+	traits::{ConstU128, ConstU16, ConstU64, GenesisBuild},
+	PalletId,
+};
+use sp_core::H256;
 use sp_runtime::{
 	testing::Header,
 	traits::{BlakeTwo256, IdentityLookup},
 };
-use sp_core::H256;
+use crate::ClubWeightInfo;
 
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
@@ -83,25 +87,26 @@ parameter_types! {
 impl pallet_club::Config for Test {
 	type Currency = Balances;
 	type RuntimeEvent = RuntimeEvent;
-	type WeightInfo = ();
+	type WeightInfo = ClubWeightInfo<Test>;
 	type PalletId = ClubPalletId;
 	type BlocksPerYear = BlocksPerYear;
 	type ClubCreationFee = ClubCreationFee;
 	type MaxNumberOfYears = MaxNumberOfYears;
 }
 
-pub(crate) fn new_test_ext(root_account: AccountId, club_creation_fee: Balance, balances: Vec<(AccountId, Balance)>) -> sp_io::TestExternalities {
+pub(crate) fn new_test_ext(
+	root_account: AccountId,
+	club_creation_fee: Balance,
+	balances: Vec<(AccountId, Balance)>,
+) -> sp_io::TestExternalities {
 	let mut storage = frame_system::GenesisConfig::default().build_storage::<Test>().unwrap();
 
-	let balance_config: pallet_balances::GenesisConfig<Test> = pallet_balances::GenesisConfig {
-		balances
-	};
+	let balance_config: pallet_balances::GenesisConfig<Test> =
+		pallet_balances::GenesisConfig { balances };
 	balance_config.assimilate_storage(&mut storage).unwrap();
 
-	let club_config: pallet_club::GenesisConfig<Test> = pallet_club::GenesisConfig {
-		root_account: Some(root_account),
-		club_creation_fee
-	};
+	let club_config: pallet_club::GenesisConfig<Test> =
+		pallet_club::GenesisConfig { root_account: Some(root_account), club_creation_fee };
 	club_config.assimilate_storage(&mut storage).unwrap();
 
 	let mut ext: sp_io::TestExternalities = storage.into();
