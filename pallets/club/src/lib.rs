@@ -121,12 +121,12 @@ pub mod pallet {
 
 	// Block_number => count of future expiration in `ClubMemberFutureExpirations`
 	#[pallet::storage]
-	pub(super) type ExpirationsPerBlock<T: Config> = StorageMap<_, Identity, T::BlockNumber, u64>;
+	pub(super) type ExpirationsPerBlock<T: Config> = StorageMap<_, Identity, T::BlockNumber, u32>;
 
 	// (Block_number, index) => (account, club_id)
 	#[pallet::storage]
 	pub(super) type ClubMemberFutureExpirations<T: Config> =
-		StorageMap<_, Identity, (T::BlockNumber, u64), (T::AccountId, u64)>;
+		StorageMap<_, Identity, (T::BlockNumber, u32), (T::AccountId, u64)>;
 
 	// To renew double map of account_id -> club_id -> expiration details
 	#[pallet::storage]
@@ -244,11 +244,7 @@ pub mod pallet {
 				Self::deposit_event(Event::<T>::MembershipExpired { club_id, member: account_id });
 			}
 
-			T::WeightInfo::on_initialize(
-				expirations
-					.try_into()
-					.expect("Number of expiration cannot be more than u32::MAX"),
-			)
+			T::WeightInfo::on_initialize(expirations)
 		}
 	}
 
